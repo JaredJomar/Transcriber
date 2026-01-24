@@ -1,21 +1,9 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Callable, Optional
+﻿from __future__ import annotations
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from transcriber.pipeline import run_transcription
-
-
-@dataclass
-class TranscriptionConfig:
-    url: str
-    language: str
-    model_name: str
-    is_playlist: bool
-    ffmpeg_path: str | None
-    ytdlp_path: str | None
+from transcriber.types import TranscriptionConfig
 
 
 class TranscribeWorker(QObject):
@@ -53,6 +41,7 @@ class TranscribeWorker(QObject):
                 is_playlist=self._config.is_playlist,
                 ffmpeg_path=self._config.ffmpeg_path,
                 ytdlp_path=self._config.ytdlp_path,
+                output_dir=self._config.output_dir,
                 log=log,
                 progress=progress,
                 backend=backend,
