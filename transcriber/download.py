@@ -8,25 +8,47 @@ from transcriber.system import run_command, run_json
 from transcriber.types import ToolPaths, VideoItem
 
 
+def detect_playlist(url: str, log: Callable[[str], None]) -> bool:
+    """Detect if URL is a playlist by checking the URL pattern."""
+    try:
+        import yt_dlp
+        
+        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'extract_flat': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            is_playlist = info.get('_type') == 'playlist'
+            if is_playlist:
+                log(f"Detected playlist with {len(info.get('entries', []))} items")
+            else:
+                log("Detected single video")
+            return is_playlist
+    except Exception:
+        # Fallback: check URL patterns
+        playlist_indicators = ['list=', '/playlist', '/playlists/', 'playlist?']
+        is_playlist = any(indicator in url.lower() for indicator in playlist_indicators)
+        if is_playlist:
+            log("Detected playlist from URL pattern")
+        return is_playlist
+
+
 def download_audio(
     url: str,
-    is_playlist: bool,
     output_dir: Path,
     log: Callable[[str], None],
     tools: ToolPaths,
 ) -> list[VideoItem]:
+    # Detect for logging purposes only
+    _ = detect_playlist(url, log)
     try:
         import yt_dlp
 
-        return download_with_module(url, is_playlist, output_dir, log, yt_dlp, tools)
+        return download_with_module(url, output_dir, log, yt_dlp, tools)
     except ImportError:
         log("yt-dlp module not available. Falling back to CLI.")
-        return download_with_cli(url, is_playlist, output_dir, log, tools)
+        return download_with_cli(url, output_dir, log, tools)
 
 
 def download_with_module(
     url: str,
-    is_playlist: bool,
     output_dir: Path,
     log: Callable[[str], None],
     yt_dlp,
@@ -36,7 +58,11 @@ def download_with_module(
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": output_template,
-        "noplaylist": not is_playlist,
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "wav",
+            "preferredquality": "192",
+        }],
         "quiet": True,
         "no_warnings": True,
         "ignoreerrors": True,
@@ -54,15 +80,22 @@ def download_with_module(
             video_id = entry.get("id") or "unknown"
             title = entry.get("title") or video_id
             webpage_url = entry.get("webpage_url") or url
-            raw_path = resolve_downloaded_path(entry, output_dir, ydl)
-            if raw_path is None or not raw_path.exists():
-                raw_path = find_downloaded_file(output_dir, video_id)
-            if raw_path is None:
-                log(f"Skipping {video_id}: downloaded file not found.")
-                continue
-
+            
+            # After postprocessor, file should be .wav
             wav_path = output_dir / f"{video_id}.wav"
-            convert_to_wav(raw_path, wav_path, log, tools)
+            if not wav_path.exists():
+                # If not found, try to find any downloaded file for this video_id
+                raw_path = find_downloaded_file(output_dir, video_id)
+                if raw_path is None:
+                    log(f"Skipping {video_id}: downloaded file not found.")
+                    continue
+                # Convert to WAV if needed
+                if raw_path.suffix.lower() != '.wav':
+                    convert_to_wav(raw_path, wav_path, log, tools)
+                    raw_path.unlink()  # Clean up original
+                else:
+                    wav_path = raw_path
+            
             items.append(VideoItem(video_id=video_id, title=title, url=webpage_url, audio_path=wav_path))
 
         return items
@@ -70,7 +103,6 @@ def download_with_module(
 
 def download_with_cli(
     url: str,
-    is_playlist: bool,
     output_dir: Path,
     log: Callable[[str], None],
     tools: ToolPaths,
@@ -78,8 +110,6 @@ def download_with_cli(
     if tools.ytdlp is None:
         raise RuntimeError("yt-dlp CLI not found.")
     info_cmd = [tools.ytdlp, "--dump-single-json"]
-    if not is_playlist:
-        info_cmd.append("--no-playlist")
     info_cmd.append(url)
     info = run_json(info_cmd, log)
 
@@ -94,8 +124,8 @@ def download_with_cli(
         "-o",
         output_template,
     ]
-    if not is_playlist:
-        download_cmd.append("--no-playlist")
+    # Explicitly enable playlists to ensure all items download
+    download_cmd.append("--yes-playlist")
     download_cmd.append(url)
 
     log("Downloading audio with yt-dlp CLI...")

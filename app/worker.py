@@ -38,7 +38,6 @@ class TranscribeWorker(QObject):
                 url=self._config.url,
                 language=self._config.language,
                 model_name=self._config.model_name,
-                is_playlist=self._config.is_playlist,
                 ffmpeg_path=self._config.ffmpeg_path,
                 ytdlp_path=self._config.ytdlp_path,
                 output_dir=self._config.output_dir,

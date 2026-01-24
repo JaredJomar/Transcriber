@@ -14,7 +14,6 @@ def run_transcription(
     url: str,
     language: str,
     model_name: str,
-    is_playlist: bool,
     ffmpeg_path: str | None,
     ytdlp_path: str | None,
     output_dir: str | None,
@@ -38,7 +37,7 @@ def run_transcription(
     data_dir.mkdir(parents=True, exist_ok=True)
     transcripts_dir.mkdir(parents=True, exist_ok=True)
 
-    items = download_audio(url, is_playlist, data_dir, log, tools)
+    items = download_audio(url, data_dir, log, tools)
     if not items:
         raise RuntimeError("No audio files were downloaded.")
 

@@ -23,7 +23,6 @@ class TranscriptionConfig:
     url: str
     language: str
     model_name: str
-    is_playlist: bool
     ffmpeg_path: str | None
     ytdlp_path: str | None
     output_dir: str | None

@@ -105,16 +105,12 @@ class MainWindow(QMainWindow):
         self.model_combo.addItems(["tiny", "base", "small", "medium"])
         self.model_combo.setCurrentText("base")
 
-        self.playlist_checkbox = QCheckBox("Playlist")
-        self.playlist_checkbox.setToolTip("Treat the URL as a playlist if supported")
-
         settings_layout.addWidget(QLabel("URL"), 0, 0)
         settings_layout.addWidget(self.url_input, 0, 1, 1, 3)
         settings_layout.addWidget(QLabel("Language"), 1, 0)
         settings_layout.addWidget(self.language_combo, 1, 1)
         settings_layout.addWidget(QLabel("Model"), 1, 2)
         settings_layout.addWidget(self.model_combo, 1, 3)
-        settings_layout.addWidget(self.playlist_checkbox, 2, 0, 1, 2)
 
         action_row = QHBoxLayout()
         self.start_button = QPushButton("Transcribe")
@@ -251,7 +247,6 @@ class MainWindow(QMainWindow):
             url=url,
             language=self.language_combo.currentText(),
             model_name=self.model_combo.currentText(),
-            is_playlist=self.playlist_checkbox.isChecked(),
             ffmpeg_path=self._normalized_path(self.ffmpeg_input.text()),
             ytdlp_path=self._normalized_path(self.ytdlp_input.text()),
             output_dir=self._normalized_path(self.output_dir_input.text()),
@@ -315,7 +310,6 @@ class MainWindow(QMainWindow):
         self.url_input.setEnabled(enabled)
         self.language_combo.setEnabled(enabled)
         self.model_combo.setEnabled(enabled)
-        self.playlist_checkbox.setEnabled(enabled)
         self.start_button.setEnabled(enabled)
         self.cancel_button.setEnabled(not enabled)
 
