@@ -6,8 +6,8 @@ from pathlib import Path
 
 block_cipher = None
 
-# Use Windows-style path for icon (if exists)
-icon_path = 'icons\\app_icon.ico' if os.path.exists('icons\\app_icon.ico') else None
+# Use Windows-style path for icon (absolute path)
+icon_path = os.path.abspath('icons\\app_icon_256x256.ico')
 
 # Try to include expat and OpenSSL DLLs explicitly
 extra_binaries = []
@@ -43,7 +43,6 @@ a = Analysis(
     datas=[
         ('app', 'app'),
         ('transcriber', 'transcriber'),
-        ('helpers.py', '.'),
     ],
     hiddenimports=[
         'PyQt6',
