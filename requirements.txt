@@ -1,0 +1,16 @@
+# Core GUI
+PyQt6>=6.5
+
+# Downloading
+yt-dlp>=2024.7.7
+
+# Speech-to-text
+openai-whisper>=20231117
+
+# Torch (CPU wheels by default; see README for CUDA wheels)
+torch
+torchvision
+torchaudio
+
+# Optional: DirectML (Windows, not available on Python 3.12+)
+torch-directml; python_version < "3.12"
