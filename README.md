@@ -57,7 +57,11 @@ pip install --upgrade --force-reinstall --no-deps \
 
 ### UI Preview
 
-![Transcriber UI](img/image.png)
+**Main Window:**
+![Transcriber Main Window](img/main.png)
+
+**Settings:**
+![Transcriber Settings](img/settings.png)
 
 ## Settings
 

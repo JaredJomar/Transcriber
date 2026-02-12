@@ -58,14 +58,10 @@ def download_with_module(
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": output_template,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "wav",
-            "preferredquality": "192",
-        }],
         "quiet": True,
         "no_warnings": True,
         "ignoreerrors": True,
+        "noprogress": True,
     }
 
     log("Downloading audio with yt-dlp module...")
@@ -116,11 +112,10 @@ def download_with_cli(
     output_template = str(output_dir / "%(id)s.%(ext)s")
     download_cmd = [
         tools.ytdlp,
-        "-x",
-        "--audio-format",
-        "wav",
-        "--audio-quality",
-        "0",
+        "-f",
+        "bestaudio/best",
+        "--no-warnings",
+        "--no-progress",
         "-o",
         output_template,
     ]
@@ -141,8 +136,15 @@ def download_with_cli(
         webpage_url = entry.get("webpage_url") or url
         wav_path = output_dir / f"{video_id}.wav"
         if not wav_path.exists():
-            log(f"Skipping {video_id}: WAV file not found.")
-            continue
+            raw_path = find_downloaded_file(output_dir, video_id)
+            if raw_path is None:
+                log(f"Skipping {video_id}: downloaded file not found.")
+                continue
+            if raw_path.suffix.lower() != ".wav":
+                convert_to_wav(raw_path, wav_path, log, tools)
+                raw_path.unlink()
+            else:
+                wav_path = raw_path
         items.append(VideoItem(video_id=video_id, title=title, url=webpage_url, audio_path=wav_path))
 
     return items

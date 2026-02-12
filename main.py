@@ -16,6 +16,7 @@ if getattr(sys, 'frozen', False) and sys.platform == 'win32':
                 pass
         os.environ['PATH'] = torch_lib + os.pathsep + os.environ.get('PATH', '')
 
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from app.window import MainWindow
@@ -23,6 +24,9 @@ from app.window import MainWindow
 
 def main() -> int:
     app = QApplication(sys.argv)
+    icon_path = os.path.join(os.path.dirname(__file__), "icons", "app_icon.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     window = MainWindow()
     window.show()
     return app.exec()

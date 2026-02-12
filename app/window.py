@@ -2,24 +2,29 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from PyQt6.QtCore import QSettings, QThread, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QProgressBar,
     QTabWidget,
     QTextEdit,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -59,6 +64,8 @@ THEMES: dict[str, dict[str, str]] = {
     },
 }
 
+_URL_REGEX = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+
 
 @dataclass
 class UiState:
@@ -70,11 +77,29 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Transcriber")
         self.setMinimumWidth(760)
+        icon_path = Path(__file__).resolve().parents[1] / "icons" / "app_icon.ico"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         self._thread: QThread | None = None
         self._worker: TranscribeWorker | None = None
         self._state = UiState()
         self._settings = QSettings("Sisyphus", "Transcriber")
+        self._clipboard = QGuiApplication.clipboard()
+        if self._clipboard is not None:
+            self._clipboard.dataChanged.connect(self._on_clipboard_changed)
+        self._queue_dialog: QDialog | None = None
+        self._queue_list: QListWidget | None = None
+        self._queue_capture: QCheckBox | None = None
+        self._queue_status: QLabel | None = None
+        self._queue_start_button: QPushButton | None = None
+        self._queue_stop_button: QPushButton | None = None
+        self._queue_remove_button: QPushButton | None = None
+        self._queue_clear_button: QPushButton | None = None
+        self._queue_urls: list[str] = []
+        self._queue_url_set: set[str] = set()
+        self._queue_running = False
+        self._last_clipboard_text: str | None = None
 
         self._build_ui()
 
@@ -98,6 +123,10 @@ class MainWindow(QMainWindow):
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("Paste video or playlist URL")
 
+        self.output_dir_input = QLineEdit()
+        self.output_dir_input.setPlaceholderText("Output folder (optional)")
+        output_browse = QPushButton("Browse")
+
         self.language_combo = QComboBox()
         self.language_combo.addItems(["auto", "en", "es"])
 
@@ -107,10 +136,13 @@ class MainWindow(QMainWindow):
 
         settings_layout.addWidget(QLabel("URL"), 0, 0)
         settings_layout.addWidget(self.url_input, 0, 1, 1, 3)
-        settings_layout.addWidget(QLabel("Language"), 1, 0)
-        settings_layout.addWidget(self.language_combo, 1, 1)
-        settings_layout.addWidget(QLabel("Model"), 1, 2)
-        settings_layout.addWidget(self.model_combo, 1, 3)
+        settings_layout.addWidget(QLabel("Output"), 1, 0)
+        settings_layout.addWidget(self.output_dir_input, 1, 1, 1, 2)
+        settings_layout.addWidget(output_browse, 1, 3)
+        settings_layout.addWidget(QLabel("Language"), 2, 0)
+        settings_layout.addWidget(self.language_combo, 2, 1)
+        settings_layout.addWidget(QLabel("Model"), 2, 2)
+        settings_layout.addWidget(self.model_combo, 2, 3)
 
         action_row = QHBoxLayout()
         self.start_button = QPushButton("Transcribe")
@@ -119,9 +151,11 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.output_open_button = QPushButton("Open Output")
         self.output_open_button.setObjectName("SubtleButton")
+        self.queue_button = QPushButton("Queue")
         action_row.addWidget(self.start_button)
         action_row.addWidget(self.cancel_button)
         action_row.addWidget(self.output_open_button)
+        action_row.addWidget(self.queue_button)
 
         self.backend_label = QLabel("Backend: -")
         self.progress = QProgressBar()
@@ -155,10 +189,6 @@ class MainWindow(QMainWindow):
         self.ytdlp_input.setPlaceholderText("Path to yt-dlp.exe")
         ytdlp_browse = QPushButton("Browse")
 
-        self.output_dir_input = QLineEdit()
-        self.output_dir_input.setPlaceholderText("Output folder (optional)")
-        output_browse = QPushButton("Browse")
-
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["System", "Light", "Dark"])
 
@@ -169,11 +199,8 @@ class MainWindow(QMainWindow):
         settings_tab_layout.addWidget(QLabel("yt-dlp"), 1, 0)
         settings_tab_layout.addWidget(self.ytdlp_input, 1, 1)
         settings_tab_layout.addWidget(ytdlp_browse, 1, 2)
-        settings_tab_layout.addWidget(QLabel("Output"), 2, 0)
-        settings_tab_layout.addWidget(self.output_dir_input, 2, 1)
-        settings_tab_layout.addWidget(output_browse, 2, 2)
-        settings_tab_layout.addWidget(QLabel("Theme"), 3, 0)
-        settings_tab_layout.addWidget(self.theme_combo, 3, 1, 1, 2)
+        settings_tab_layout.addWidget(QLabel("Theme"), 2, 0)
+        settings_tab_layout.addWidget(self.theme_combo, 2, 1, 1, 2)
 
         settings_tab_layout.setColumnStretch(1, 1)
 
@@ -190,6 +217,7 @@ class MainWindow(QMainWindow):
         ytdlp_browse.clicked.connect(self._browse_ytdlp)
         output_browse.clicked.connect(self._browse_output_dir)
         self.output_open_button.clicked.connect(self._open_output_dir)
+        self.queue_button.clicked.connect(self._open_queue_dialog)
         self.theme_combo.currentTextChanged.connect(self._on_theme_changed)
 
         self._load_settings()
@@ -237,10 +265,15 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _on_start(self) -> None:
-        url = self.url_input.text().strip()
+        self._start_from_url(self.url_input.text().strip(), show_warning=True)
+
+    def _start_from_url(self, url: str, *, show_warning: bool) -> bool:
         if not url:
-            QMessageBox.warning(self, "Missing URL", "Please provide a video or playlist URL.")
-            return
+            if show_warning:
+                QMessageBox.warning(self, "Missing URL", "Please provide a video or playlist URL.")
+            else:
+                self._append_log("Skipped empty URL in queue.")
+            return False
 
         self._save_settings()
         config = TranscriptionConfig(
@@ -252,6 +285,7 @@ class MainWindow(QMainWindow):
             output_dir=self._normalized_path(self.output_dir_input.text()),
         )
         self._start_worker(config)
+        return True
 
     def _start_worker(self, config: TranscriptionConfig) -> None:
         if self._state.running:
@@ -286,6 +320,8 @@ class MainWindow(QMainWindow):
         self._append_log("Cancellation requested...")
         self._worker.cancel()
         self.cancel_button.setEnabled(False)
+        self._queue_running = False
+        self._update_queue_status()
 
     def _on_progress(self, current: int, total: int) -> None:
         if total <= 0:
@@ -302,6 +338,9 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(True)
         status = "completed" if success else "stopped"
         self._append_log(f"Transcription {status}: {message}")
+        self.url_input.clear()
+        if self._queue_running:
+            self._start_next_from_queue()
 
     def _append_log(self, message: str) -> None:
         self.log_view.append(message)
@@ -312,6 +351,7 @@ class MainWindow(QMainWindow):
         self.model_combo.setEnabled(enabled)
         self.start_button.setEnabled(enabled)
         self.cancel_button.setEnabled(not enabled)
+        self._update_queue_status()
 
     def _load_settings(self) -> None:
         self.ffmpeg_input.setText(self._settings.value("paths/ffmpeg", ""))
@@ -330,6 +370,174 @@ class MainWindow(QMainWindow):
     def _on_theme_changed(self, theme: str) -> None:
         self._settings.setValue("ui/theme", theme)
         self._apply_theme(theme)
+
+    def _open_queue_dialog(self) -> None:
+        if self._queue_dialog is None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("URL Queue")
+            dialog.setMinimumWidth(520)
+
+            layout = QVBoxLayout(dialog)
+            info = QLabel("Copy URLs and they will be added to the queue automatically.")
+            layout.addWidget(info)
+
+            queue_capture = QCheckBox("Capture clipboard URLs")
+            queue_capture.toggled.connect(self._on_queue_capture_toggled)
+            layout.addWidget(queue_capture)
+            self._queue_capture = queue_capture
+
+            queue_list = QListWidget()
+            queue_list.setSelectionMode(
+                QAbstractItemView.SelectionMode.ExtendedSelection
+            )
+            layout.addWidget(queue_list)
+            self._queue_list = queue_list
+
+            queue_status = QLabel("0 URLs queued")
+            layout.addWidget(queue_status)
+            self._queue_status = queue_status
+
+            button_row = QHBoxLayout()
+            queue_start_button = QPushButton("Start Queue")
+            queue_stop_button = QPushButton("Stop Queue")
+            queue_remove_button = QPushButton("Remove Selected")
+            queue_clear_button = QPushButton("Clear")
+            close_button = QPushButton("Close")
+            button_row.addWidget(queue_start_button)
+            button_row.addWidget(queue_stop_button)
+            button_row.addWidget(queue_remove_button)
+            button_row.addWidget(queue_clear_button)
+            button_row.addWidget(close_button)
+            layout.addLayout(button_row)
+
+            queue_start_button.clicked.connect(self._start_queue)
+            queue_stop_button.clicked.connect(self._stop_queue)
+            queue_remove_button.clicked.connect(self._remove_selected_queue_items)
+            queue_clear_button.clicked.connect(self._clear_queue)
+            close_button.clicked.connect(dialog.close)
+
+            self._queue_start_button = queue_start_button
+            self._queue_stop_button = queue_stop_button
+            self._queue_remove_button = queue_remove_button
+            self._queue_clear_button = queue_clear_button
+
+            self._queue_dialog = dialog
+            self._update_queue_status()
+
+        dialog = self._queue_dialog
+        if dialog is None:
+            return
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_queue_capture_toggled(self, enabled: bool) -> None:
+        if enabled:
+            self._ingest_clipboard()
+
+    def _on_clipboard_changed(self) -> None:
+        if not self._queue_capture or not self._queue_capture.isChecked():
+            return
+        self._ingest_clipboard()
+
+    def _ingest_clipboard(self) -> None:
+        if self._clipboard is None:
+            return
+        text = self._clipboard.text().strip()
+        if not text or text == self._last_clipboard_text:
+            return
+        self._last_clipboard_text = text
+        for url in self._extract_urls(text):
+            self._enqueue_url(url)
+
+    def _extract_urls(self, text: str) -> list[str]:
+        urls: list[str] = []
+        for match in _URL_REGEX.findall(text):
+            cleaned = match.rstrip(").,;)]\"'")
+            if cleaned:
+                urls.append(cleaned)
+        return urls
+
+    def _enqueue_url(self, url: str) -> None:
+        if url in self._queue_url_set:
+            return
+        self._queue_urls.append(url)
+        self._queue_url_set.add(url)
+        if self._queue_list is not None:
+            self._queue_list.addItem(url)
+        self._update_queue_status()
+
+    def _start_queue(self) -> None:
+        if self._queue_running or not self._queue_urls:
+            return
+        self._queue_running = True
+        self._append_log("Queue started.")
+        self._update_queue_status()
+        self._start_next_from_queue()
+
+    def _stop_queue(self) -> None:
+        if not self._queue_running:
+            return
+        self._queue_running = False
+        self._append_log("Queue stopped.")
+        self._update_queue_status()
+
+    def _start_next_from_queue(self) -> None:
+        if not self._queue_running or self._state.running:
+            return
+        if not self._queue_urls:
+            self._queue_running = False
+            self._append_log("Queue completed.")
+            self._update_queue_status()
+            return
+
+        next_url = self._queue_urls.pop(0)
+        self._queue_url_set.discard(next_url)
+        if self._queue_list is not None:
+            self._queue_list.takeItem(0)
+        self.url_input.setText(next_url)
+        started = self._start_from_url(next_url, show_warning=False)
+        if not started:
+            self._start_next_from_queue()
+        self._update_queue_status()
+
+    def _remove_selected_queue_items(self) -> None:
+        if self._queue_list is None:
+            return
+        selected_rows = sorted(
+            (item.row() for item in self._queue_list.selectedIndexes()),
+            reverse=True,
+        )
+        for row in selected_rows:
+            if 0 <= row < len(self._queue_urls):
+                url = self._queue_urls.pop(row)
+                self._queue_url_set.discard(url)
+                self._queue_list.takeItem(row)
+        self._update_queue_status()
+
+    def _clear_queue(self) -> None:
+        self._queue_running = False
+        self._queue_urls.clear()
+        self._queue_url_set.clear()
+        if self._queue_list is not None:
+            self._queue_list.clear()
+        self._update_queue_status()
+
+    def _update_queue_status(self) -> None:
+        if self._queue_status is not None:
+            total = len(self._queue_urls)
+            label = "URL queued" if total == 1 else "URLs queued"
+            self._queue_status.setText(f"{total} {label}")
+        if self._queue_start_button is not None:
+            self._queue_start_button.setEnabled(
+                bool(self._queue_urls) and not self._queue_running and not self._state.running
+            )
+        if self._queue_stop_button is not None:
+            self._queue_stop_button.setEnabled(self._queue_running)
+        if self._queue_remove_button is not None:
+            self._queue_remove_button.setEnabled(bool(self._queue_urls))
+        if self._queue_clear_button is not None:
+            self._queue_clear_button.setEnabled(bool(self._queue_urls))
 
     def _apply_theme(self, theme: str) -> None:
         if theme == "System":
@@ -474,6 +682,3 @@ QTabBar::tab:selected {{
     def _normalized_path(value: str) -> str | None:
         cleaned = value.strip()
         return cleaned or None
-
-
-

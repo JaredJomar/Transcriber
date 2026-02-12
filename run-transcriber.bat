@@ -1,4 +1,9 @@
 @echo off
+if not defined SILENT (
+  start /min "" cmd /c "set SILENT=1 && "%~f0" %*"
+  exit /b
+)
+
 setlocal
 
 REM Change to the script directory
@@ -10,12 +15,13 @@ if exist ".venv\Scripts\activate.bat" (
   call ".venv\Scripts\activate.bat"
 )
 
+
 REM Prefer pythonw to avoid a console window for the GUI app
 where pythonw >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
-  pythonw main.py
+  start "" /b pythonw main.py
 ) else (
-  python main.py
+  start "" /b pythonw main.py
 )
 
 set EXITCODE=%ERRORLEVEL%
